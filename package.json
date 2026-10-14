@@ -1,0 +1,22 @@
+
+{
+  "name": "apkforge-build-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@capacitor/android": "7.4.3",
+    "@capacitor/cli": "7.4.3",
+    "@capacitor/core": "7.4.3",
+    "adm-zip": "0.5.16",
+    "express": "5.1.0",
+    "helmet": "8.1.0",
+    "multer": "2.0.2"
+  }
+}
