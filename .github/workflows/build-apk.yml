@@ -1,0 +1,109 @@
+
+name: APKFORGE APK Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: "Direct HTTPS link to an HTML or ZIP file"
+        required: true
+        type: string
+      app_name:
+        description: "App name"
+        required: true
+        default: "My Website"
+        type: string
+      package_id:
+        description: "Android package ID"
+        required: true
+        default: "com.example.myapp"
+        type: string
+      version:
+        description: "Version"
+        required: true
+        default: "1.0.0"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Android SDK tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y android-sdk
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Download website source
+        env:
+          SOURCE_URL: ${{ inputs.source_url }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs/promises";
+          const url = new URL(process.env.SOURCE_URL);
+          if (url.protocol !== "https:") throw Error("HTTPS required");
+          const r = await fetch(url);
+          if (!r.ok) throw Error("Source download failed");
+          const name = url.pathname.split("/").pop() || "source.html";
+          if (!/\.(html?|zip)$/i.test(name)) throw Error("Use an HTML or ZIP URL");
+          const data = Buffer.from(await r.arrayBuffer());
+          if (data.length > 20 * 1024 * 1024) throw Error("File exceeds 20 MB");
+          await fs.writeFile("source" + name.match(/\.(html?|zip)$/i)[0], data);
+          NODE
+
+      - name: Build APK
+        env:
+          APKFORGE_BUILD_WORKER_TOKEN: ${{ secrets.APKFORGE_BUILD_WORKER_TOKEN }}
+          APP_NAME: ${{ inputs.app_name }}
+          PACKAGE_ID: ${{ inputs.package_id }}
+          APP_VERSION: ${{ inputs.version }}
+        run: |
+          test -n "$APKFORGE_BUILD_WORKER_TOKEN"
+          mkdir -p "$ANDROID_HOME"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          npm start > worker.log 2>&1 &
+          for i in {1..30}; do
+            curl -fsS http://127.0.0.1:8080/health && break || sleep 2
+          done
+          SOURCE_FILE="$(find . -maxdepth 1 -type f -name 'source.*' -print -quit)"
+          curl --fail-with-body --show-error \
+            -H "Authorization: Bearer $APKFORGE_BUILD_WORKER_TOKEN" \
+            -F "source=@$SOURCE_FILE" \
+            -F "appName=$APP_NAME" \
+            -F "packageId=$PACKAGE_ID" \
+            -F "version=$APP_VERSION" \
+            http://127.0.0.1:8080/build \
+            --output apkforge-debug.apk
+          test -s apkforge-debug.apk
+          unzip -t apkforge-debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apkforge-debug-apk
+          path: apkforge-debug.apk
+          retention-days: 7
+
+      - name: Show build logs on failure
+        if: failure()
+        run: tail -n 200 worker.log || true
